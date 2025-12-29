@@ -68,6 +68,9 @@ class AuthBoto(AuthBase):
                 "notebook_id",
                 "workload_class",
                 "workload_id",
+                "job_id",
+                "job_run_id",
+                "job_type",
             ]
         )
 
