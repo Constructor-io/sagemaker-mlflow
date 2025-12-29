@@ -12,6 +12,7 @@
 # language governing permissions and limitations under the License.
 
 import functools
+import logging
 import os
 from hashlib import sha256
 from typing import Optional
@@ -49,6 +50,7 @@ class AuthBoto(AuthBase):
         self.region = region
 
         if assume_role_arn is not None:
+            logging.info(f"Assuming role: {assume_role_arn}")
             # Use cached or fresh assumed role credentials
             credentials = self._get_cached_credentials(assume_role_arn)
             self.creds = boto3.Session(
@@ -142,8 +144,11 @@ class AuthBoto(AuthBase):
             url = (url or "").replace("+", "%20")
 
         # DROPPING disallowed extra headers
+        logging.info(f"Initial headers state: {headers}")
         for disallowed_extra_header in self._disallowed_extra_headers:
+            logging.info(f"Dropping: {disallowed_extra_header}")
             headers.pop(disallowed_extra_header, None)
+        logging.info(f"Current headers state: {headers}")
 
         # Creating a new request with the SigV4 signed headers.
         aws_request = AWSRequest(method=method, url=url, data=r.body, headers=headers)
