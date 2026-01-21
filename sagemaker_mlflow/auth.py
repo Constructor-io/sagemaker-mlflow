@@ -11,16 +11,17 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 
-from typing import Optional
-import boto3
-from requests.auth import AuthBase
-from requests.models import PreparedRequest
+import functools
 import os
+from hashlib import sha256
+from typing import Optional
 
+import boto3
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-from hashlib import sha256
-import functools
+from requests.auth import AuthBase
+from requests.models import PreparedRequest
+
 from sagemaker_mlflow.credential_cache import CredentialCache
 
 PAYLOAD_BUFFER = 1024 * 1024
@@ -35,7 +36,9 @@ class AuthBoto(AuthBase):
     # Class-level credential cache shared across instances
     _credential_cache = CredentialCache()
 
-    def __init__(self, region: str, service_name: str, assume_role_arn: Optional[str] = None):
+    def __init__(
+        self, region: str, service_name: str, assume_role_arn: Optional[str] = None
+    ):
         """
         Constructor for Authorization Mechanism
         :param region: AWS region (e.g., us-west-2)
@@ -58,6 +61,19 @@ class AuthBoto(AuthBase):
             session = boto3.Session()
             self.creds = session.get_credentials()
 
+        self._disallowed_extra_headers: tuple[str] = tuple(
+            [
+                "cluster_id",
+                "command_run_id",
+                "notebook_id",
+                "workload_class",
+                "workload_id",
+                "job_id",
+                "job_run_id",
+                "job_type",
+            ]
+        )
+
         self.sigv4 = SigV4Auth(self.creds, service_name, self.region)
 
     def _get_cached_credentials(self, assume_role_arn: str) -> dict:
@@ -75,17 +91,26 @@ class AuthBoto(AuthBase):
         # Cache miss - fetch new credentials via STS
         session = boto3.Session()
         sts_client = session.client("sts")
-        assumed_role_object = sts_client.assume_role(RoleArn=assume_role_arn, RoleSessionName="AuthBotoSagemakerMlFlow")
+        assumed_role_object = sts_client.assume_role(
+            RoleArn=assume_role_arn, RoleSessionName="AuthBotoSagemakerMlFlow"
+        )
         credentials = assumed_role_object["Credentials"]
 
         # Get TTL from environment variable with default fallback
-        ttl_seconds = int(os.environ.get("SAGEMAKER_MLFLOW_ASSUME_ROLE_TTL_SECONDS", DEFAULT_CREDENTIAL_TTL_SECONDS))
+        ttl_seconds = int(
+            os.environ.get(
+                "SAGEMAKER_MLFLOW_ASSUME_ROLE_TTL_SECONDS",
+                DEFAULT_CREDENTIAL_TTL_SECONDS,
+            )
+        )
 
         # Validate TTL is within reasonable bounds (5 minutes to 1 hour)
         ttl_seconds = max(300, min(ttl_seconds, 3600))
 
         # Cache the credentials
-        self._credential_cache.set_credentials(assume_role_arn, credentials, ttl_seconds)
+        self._credential_cache.set_credentials(
+            assume_role_arn, credentials, ttl_seconds
+        )
 
         return credentials
 
@@ -116,6 +141,10 @@ class AuthBoto(AuthBase):
         if method == "GET" or method == "DELETE":
             url = (url or "").replace("+", "%20")
 
+        # DROPPING disallowed extra headers
+        for disallowed_extra_header in self._disallowed_extra_headers:
+            headers.pop(disallowed_extra_header, None)
+
         # Creating a new request with the SigV4 signed headers.
         aws_request = AWSRequest(method=method, url=url, data=r.body, headers=headers)
         self.sigv4.add_auth(aws_request)
@@ -123,7 +152,9 @@ class AuthBoto(AuthBase):
         # Adding back in the connection header.
         final_headers = aws_request.headers
         final_headers["Connection"] = connection_header
-        final_request = AWSRequest(method=method, url=url, data=r.body, headers=final_headers)
+        final_request = AWSRequest(
+            method=method, url=url, data=r.body, headers=final_headers
+        )
 
         return final_request.prepare()
 
